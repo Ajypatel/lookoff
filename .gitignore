@@ -1,0 +1,25 @@
+# Xcode
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift
+.swiftpm/
+Package.resolved
+
+# OS
+.DS_Store
+*.swp
+*~
+
+# Secrets
+*.p12
+*.cer
+*.certSigningRequest
+.env

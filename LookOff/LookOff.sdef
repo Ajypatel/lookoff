@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE dictionary SYSTEM "file://localhost/System/Library/DTDs/sdef.dtd">
+<dictionary title="LookOff Terminology">
+    <suite name="LookOff Suite" code="LkOf" description="Commands for LookOff">
+        <command name="start next break" code="LkOfStNB" description="Begin the next break immediately.">
+            <cocoa class="StartNextBreakCommand"/>
+        </command>
+        <command name="start long break" code="LkOfStLB" description="Force a long break.">
+            <cocoa class="StartLongBreakCommand"/>
+        </command>
+        <command name="start break" code="LkOfStBk" description="Start a break of a given length.">
+            <cocoa class="StartCustomBreakCommand"/>
+            <parameter name="for" code="BkSc" type="integer" optional="yes" description="Duration in seconds.">
+                <cocoa key="durationSeconds"/>
+            </parameter>
+            <parameter name="with message" code="BkMs" type="text" optional="yes" description="Overlay title for this break only.">
+                <cocoa key="message"/>
+            </parameter>
+        </command>
+        <command name="pause" code="LkOfPaus" description="Pause the schedule.">
+            <cocoa class="PauseLookOffCommand"/>
+        </command>
+        <command name="pause temporarily" code="LkOfPsTm" description="Pause for a number of seconds.">
+            <cocoa class="PauseTemporarilyCommand"/>
+            <parameter name="for" code="PsSc" type="integer" optional="yes" description="Seconds to stay paused.">
+                <cocoa key="seconds"/>
+            </parameter>
+        </command>
+        <command name="postpone break" code="LkOfPost" description="Delay the upcoming break.">
+            <cocoa class="PostponeBreakCommand"/>
+            <parameter name="by" code="PoSc" type="integer" optional="yes" description="Seconds to postpone.">
+                <cocoa key="seconds"/>
+            </parameter>
+        </command>
+        <command name="resume" code="LkOfRsme" description="Resume after a pause.">
+            <cocoa class="ResumeLookOffCommand"/>
+        </command>
+        <command name="open settings" code="LkOfOpSt" description="Open LookOff Settings.">
+            <cocoa class="OpenSettingsCommand"/>
+        </command>
+    </suite>
+</dictionary>
