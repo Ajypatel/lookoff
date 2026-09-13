@@ -17,6 +17,9 @@ final class IdleMonitor {
     private var threshold: TimeInterval = 120
     private var typingDebounce: TimeInterval = 1.5
     private var onChange: (() -> Void)?
+    private var lastIdleBucket: Int = -1
+    private var lastSpoofScan: Date = .distantPast
+    private var cachedSpoof = false
 
     func start(threshold: TimeInterval, onChange: @escaping () -> Void) {
         self.threshold = threshold
@@ -92,14 +95,36 @@ final class IdleMonitor {
         idleSeconds = Self.secondsSinceLastInput()
         let wasIdle = isIdle
         isIdle = idleSeconds >= threshold
+        let wasTyping = isTyping
+        let wasDragging = isDragging
         if let lastKeyAt {
             isTyping = Date().timeIntervalSince(lastKeyAt) < typingDebounce
+        } else {
+            isTyping = false
         }
         isDragging = mouseIsDown
-        spoofWarning = idleSeconds < 0.4 && Self.knownIdleSpoofersRunning()
-        if wasIdle != isIdle || isTyping || isDragging || spoofWarning {
+
+        let now = Date()
+        if now.timeIntervalSince(lastSpoofScan) >= 5 {
+            cachedSpoof = Self.knownIdleSpoofersRunning()
+            lastSpoofScan = now
+        }
+        let wasSpoof = spoofWarning
+        spoofWarning = idleSeconds < 0.4 && cachedSpoof
+
+        let idleBucket = Int(idleSeconds / 5)
+        let crossed = wasIdle != isIdle
+            || wasTyping != isTyping
+            || wasDragging != isDragging
+            || wasSpoof != spoofWarning
+        if crossed {
+            lastIdleBucket = idleBucket
             onChange?()
-        } else if isIdle {
+            return
+        }
+        // While idle, only refresh engine every ~5s — not every poll.
+        if isIdle, idleBucket != lastIdleBucket {
+            lastIdleBucket = idleBucket
             onChange?()
         }
     }

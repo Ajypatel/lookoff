@@ -15,6 +15,14 @@ final class StatusItemController: NSObject {
     private let titleFont = NSFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .semibold)
     private let panelGap: CGFloat = 5
 
+    private var lastIcon: StatusIcon?
+    private var lastTitle: String?
+    private var lastTooltipKey: String?
+    private var lastSettingsFingerprint: String?
+    private var prewarmWork: DispatchWorkItem?
+
+    var isPanelVisible: Bool { panel?.isVisible == true }
+
     func install(_ app: AppController) {
         self.app = app
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -28,28 +36,51 @@ final class StatusItemController: NSObject {
         item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         self.item = item
         apply(app.snapshot)
+        schedulePrewarm()
     }
 
     func apply(_ snapshot: EngineSnapshot) {
+        let previous = self.snapshot
         self.snapshot = snapshot
-        model.snapshot = snapshot
-        if let settings = app?.settings {
-            model.shortBreakSeconds = settings.shortBreakDuration
-            model.longBreakSeconds = settings.longBreakDuration
-            model.workMinutes = settings.workMinutes
-        }
-        if let stats = app?.stats {
-            model.today = stats.today()
-            model.currentFocusSeconds = stats.currentFocusSeconds
+
+        let icon = StatusIcon.forSnapshot(snapshot)
+        let title = snapshot.menuTitle
+        let panelOpen = isPanelVisible
+
+        if panelOpen {
+            model.snapshot = snapshot
+            syncModelSettingsIfNeeded(force: false)
+            if let stats = app?.stats {
+                model.today = stats.today()
+                model.currentFocusSeconds = stats.currentFocusSeconds
+            }
         }
 
         guard let button = item?.button else { return }
-        let icon = StatusIcon.forSnapshot(snapshot)
-        button.image = StatusMark.menuBarImage(icon, accessibilityDescription: statusAccessibility(snapshot))
-        button.toolTip = tooltip(snapshot)
+
+        if lastIcon != icon {
+            button.image = StatusMark.menuBarImage(icon, accessibilityDescription: statusAccessibility(snapshot))
+            lastIcon = icon
+        }
+
+        if lastTitle != title {
+            button.title = title
+            button.font = titleFont
+            lastTitle = title
+        }
+
         button.appearsDisabled = false
-        button.title = snapshot.menuTitle
-        button.font = titleFont
+
+        // Tooltip: phase edges or once per second while countdown changes.
+        let tooltipSecond = Int(snapshot.remaining.rounded(.down))
+        let tooltipKey = "\(snapshot.phase.rawValue)|\(snapshot.pauseReason?.rawValue ?? "")|\(snapshot.scheduleEnabled)|\(tooltipSecond)"
+        let phaseChanged = previous.phase != snapshot.phase
+            || previous.pauseReason != snapshot.pauseReason
+            || previous.scheduleEnabled != snapshot.scheduleEnabled
+        if phaseChanged || lastTooltipKey != tooltipKey {
+            button.toolTip = tooltip(snapshot)
+            lastTooltipKey = tooltipKey
+        }
     }
 
     @objc private func togglePanel(_ sender: NSStatusBarButton?) {
@@ -66,6 +97,7 @@ final class StatusItemController: NSObject {
         let panel = self.panel ?? makePanel()
         self.panel = panel
         positionPanel(panel)
+        panel.alphaValue = 1
         panel.orderFrontRegardless()
         panel.makeKey()
         startDismissMonitoring()
@@ -73,20 +105,54 @@ final class StatusItemController: NSObject {
 
     private func closePanel() {
         stopDismissMonitoring()
-        panel?.orderOut(nil)
+        guard let panel, panel.isVisible else {
+            self.panel?.orderOut(nil)
+            return
+        }
+        let duration = Motion.reduceMotion ? 0.08 : 0.14
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = duration
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            panel.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            panel.orderOut(nil)
+            panel.alphaValue = 1
+            self?.stopDismissMonitoring()
+        })
     }
 
     private func refreshModel() {
         model.snapshot = snapshot
-        if let settings = app?.settings {
-            model.shortBreakSeconds = settings.shortBreakDuration
-            model.longBreakSeconds = settings.longBreakDuration
-            model.workMinutes = settings.workMinutes
-        }
+        syncModelSettingsIfNeeded(force: true)
         if let stats = app?.stats {
             model.today = stats.today()
             model.currentFocusSeconds = stats.currentFocusSeconds
         }
+    }
+
+    private func syncModelSettingsIfNeeded(force: Bool) {
+        guard let settings = app?.settings else { return }
+        let fingerprint = "\(settings.shortBreakDuration)|\(settings.longBreakDuration)|\(settings.workMinutes)"
+        guard force || fingerprint != lastSettingsFingerprint else { return }
+        lastSettingsFingerprint = fingerprint
+        model.shortBreakSeconds = settings.shortBreakDuration
+        model.longBreakSeconds = settings.longBreakDuration
+        model.workMinutes = settings.workMinutes
+    }
+
+    private func schedulePrewarm() {
+        prewarmWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.panel == nil else { return }
+            let panel = self.makePanel()
+            panel.alphaValue = 0
+            panel.orderFrontRegardless()
+            panel.orderOut(nil)
+            panel.alphaValue = 1
+            self.panel = panel
+        }
+        prewarmWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: work)
     }
 
     private func makePanel() -> OverlayPanel {
@@ -104,8 +170,13 @@ final class StatusItemController: NSObject {
         let root = MenuBarPopoverView(
             model: model,
             onStartBreak: { [weak self] in
-                self?.app?.startBreakNow()
-                self?.closePanel()
+                guard let self else { return }
+                if self.model.isRunning {
+                    self.app?.startBreakNow()
+                } else {
+                    self.app?.startSchedule()
+                }
+                self.closePanel()
             },
             onSnooze: { [weak self] minutes in
                 self?.app?.snooze(minutes: minutes)

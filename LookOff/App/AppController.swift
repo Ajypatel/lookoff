@@ -34,6 +34,7 @@ final class AppController {
     private var headsUpShownAt: Date?
     private var tempPauseTask: Task<Void, Never>?
     private var plannedTimer: Timer?
+    private var lastPlannedSuppress: Bool?
 
     var settings: AppSettings { settingsStore.settings }
 
@@ -173,7 +174,7 @@ final class AppController {
         if hold != wellnessPauseApplied {
             wellnessPauseApplied = hold
             wellness.setPaused(hold)
-            if hold { wellnessUI.hide() }
+            // Do not cancel an on-screen nudge — let it finish while you work.
         }
     }
 
@@ -350,7 +351,7 @@ final class AppController {
     }
 
     func previewWellness(_ kind: WellnessEngine.Kind) {
-        NSApp.activate(ignoringOtherApps: true)
+        // Do not activate LookOff — keeps focus in whatever app you are using.
         wellnessUI.show(
             kind: kind,
             settings: settings,
@@ -390,9 +391,7 @@ final class AppController {
         guard hold != wellnessPauseApplied else { return }
         wellnessPauseApplied = hold
         wellness.setPaused(hold)
-        if hold {
-            wellnessUI.hide()
-        }
+        // Pause future timers only — never yank a nudge mid-animation on click/idle/smart-pause.
         _ = previous
     }
 
@@ -438,7 +437,7 @@ final class AppController {
                 }
             }
             cursor.hide()
-            wellnessUI.hide()
+            // Leave wellness alone — short nudge must finish; clicks pass through.
         case .cursorWarn:
             // Last seconds: cursor countdown takes over; hide the top toast once.
             if headsUp.isVisible { headsUp.hide() }
@@ -447,7 +446,6 @@ final class AppController {
             } else {
                 cursor.update(remaining: snapshot.remaining)
             }
-            wellnessUI.hide()
         case .onBreak:
             headsUp.hide()
             cursor.hide()
@@ -501,6 +499,9 @@ final class AppController {
             onBreak: snapshot.phase == .onBreak,
             scheduleRunning: settings.scheduleEnabled && snapshot.phase != .stopped
         )
-        Task { await engine.setPlannedSuppress(planned.suppressRegular) }
+        let suppress = planned.suppressRegular
+        guard lastPlannedSuppress != suppress else { return }
+        lastPlannedSuppress = suppress
+        Task { await engine.setPlannedSuppress(suppress) }
     }
 }

@@ -178,8 +178,8 @@ struct MenuBarPopoverView: View {
                         .font(.system(size: 42, weight: .semibold, design: .rounded))
                         .monospacedDigit()
                         .foregroundStyle(.primary)
-                        .contentTransition(.numericText())
-                        .animation(.snappy(duration: 0.25), value: model.timerText)
+                        .contentTransition(Motion.reduceMotion ? .identity : .numericText())
+                        .animation(Motion.reduceMotion ? nil : .snappy(duration: 0.25), value: model.timerText)
                 }
             }
 
@@ -292,20 +292,23 @@ struct MenuBarPopoverView: View {
                     .buttonStyle(LookOffGlassButtonStyle(prominent: true, compact: true))
                     .disabled(!canEnd)
                     .opacity(canEnd ? 1 : 0.4)
+                    .help(canEnd ? "End break early" : "End unlocks after the required time")
 
                     if model.snapshot.skipAllowed {
                         Button(action: onSkip) {
                             label("Skip", symbol: "forward.fill")
                         }
                         .buttonStyle(LookOffGlassButtonStyle(compact: true))
+                        .help("Skip this break")
                     }
                 } else {
                     Button(action: onStartBreak) {
-                        label(model.isRunning ? "Start break" : "On", symbol: "play.fill")
+                        label(model.isRunning ? "Start break" : "Start schedule", symbol: "play.fill")
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
                     }
                     .buttonStyle(LookOffGlassButtonStyle(prominent: true, compact: true))
+                    .help(model.isRunning ? "Begin a break now" : "Turn on the break schedule")
 
                     snoozeChip("+1m") { onSnooze(1) }
                     snoozeChip("+5m") { onSnooze(5) }
@@ -364,19 +367,19 @@ struct MenuBarPopoverView: View {
     }
 
     private var footer: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 8) {
             footerButton(
-                model.isRunning ? "Stop" : "Start",
+                model.isRunning ? "Stop schedule" : "Start schedule",
                 symbol: model.isRunning ? "stop.fill" : "play.fill",
                 action: onToggleSchedule
             )
             if model.isRunning, !model.isOnBreak {
                 footerButton(model.pauseTitle, symbol: model.pauseSymbol, action: onTogglePause)
             }
-            Spacer()
+            Spacer(minLength: 8)
             footerButton("Quit", symbol: "power", action: onQuit)
         }
-        .padding(.top, 2)
+        .padding(.top, 4)
     }
 
     private func label(_ title: String, symbol: String) -> some View {
@@ -406,9 +409,10 @@ struct MenuBarPopoverView: View {
                     .font(.system(size: 12, weight: .medium))
             }
             .foregroundStyle(.secondary)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
             .contentShape(Rectangle())
+            .frame(minHeight: 28)
         }
         .buttonStyle(.plain)
     }

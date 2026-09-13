@@ -564,8 +564,11 @@ private struct WellnessSettingsPreviewCard: View {
     var onPreview: () -> Void
     @State private var wallpaper: NSImage?
 
+    /// Tall enough for circular orb + preview button (matches blink layout).
+    private let previewHeight: CGFloat = 168
+
     var body: some View {
-        ZStack(alignment: .bottom) {
+        ZStack {
             Group {
                 if let wallpaper {
                     Image(nsImage: wallpaper)
@@ -583,24 +586,30 @@ private struct WellnessSettingsPreviewCard: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
 
-            WellnessPreviewLoop(kind: kind)
-                .opacity(muted ? 0.45 : 1)
-                .padding(.horizontal, 8)
-                .padding(.bottom, 34)
-                .padding(.top, 6)
+            VStack(spacing: 8) {
+                WellnessPreviewLoop(kind: kind)
+                    .opacity(muted ? 0.45 : 1)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 108)
+                    .clipped()
 
-            Button(action: onPreview) {
-                Text(kind == .posture ? "Preview posture on screen" : "Preview blink on screen")
-                    .font(.system(size: 11.5, weight: .semibold))
-                    .padding(.horizontal, 11)
-                    .padding(.vertical, 6)
-                    .background(.ultraThinMaterial, in: Capsule())
+                Button(action: onPreview) {
+                    Text(kind == .posture ? "Preview posture on screen" : "Preview blink on screen")
+                        .font(.system(size: 11, weight: .semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(.ultraThinMaterial, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .padding(.bottom, 10)
             }
-            .buttonStyle(.plain)
-            .padding(.bottom, 10)
+            .padding(.top, 10)
         }
-        .frame(height: 188)
+        .frame(height: previewHeight)
         .frame(maxWidth: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .clipped()

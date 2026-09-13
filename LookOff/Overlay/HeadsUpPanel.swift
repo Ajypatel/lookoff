@@ -6,6 +6,7 @@ import SwiftUI
 final class HeadsUpController {
     private var panel: OverlayPanel?
     private var live: HeadsUpLiveState?
+    private var hostingInstalled = false
     var onStartNow: (() -> Void)?
     var onSnooze: ((Int) -> Void)?
 
@@ -36,13 +37,19 @@ final class HeadsUpController {
         panel.sharingType = settings.hideFromRecordings ? .none : .readOnly
         panel.setFrame(NSRect(origin: origin, size: size), display: true)
         panel.ignoresMouseEvents = false
-        panel.contentView = NSHostingView(
-            rootView: HeadsUpView(
-                live: live,
-                onStartNow: { [weak self] in self?.onStartNow?(); self?.hide() },
-                onSnooze: { [weak self] minutes in self?.onSnooze?(minutes); self?.hide() }
+
+        if !hostingInstalled || panel.contentView == nil {
+            panel.contentView = NSHostingView(
+                rootView: HeadsUpView(
+                    live: live,
+                    onStartNow: { [weak self] in self?.onStartNow?(); self?.hide() },
+                    onSnooze: { [weak self] minutes in self?.onSnooze?(minutes); self?.hide() }
+                )
             )
-        )
+            hostingInstalled = true
+        }
+
+        panel.alphaValue = 1
         panel.orderFrontRegardless()
         self.panel = panel
         isVisible = true
@@ -89,6 +96,8 @@ struct HeadsUpView: View {
                         .font(.system(size: 28, weight: .semibold, design: .rounded))
                         .monospacedDigit()
                         .foregroundStyle(.primary)
+                        .contentTransition(Motion.reduceMotion ? .identity : .numericText())
+                        .animation(Motion.reduceMotion ? nil : .snappy(duration: 0.2), value: live.remaining)
                     Text("Almost time · short break · \(breakLabel)")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.secondary)

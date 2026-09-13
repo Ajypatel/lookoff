@@ -12,6 +12,7 @@ final class WellnessOverlayController {
     private var hideWork: DispatchWorkItem?
     private var live: WellnessLiveState?
     private var currentKind: WellnessEngine.Kind = .posture
+    private(set) var isVisible = false
     var onCue: ((WellnessSoundCue, WellnessEngine.Kind) -> Void)?
 
     func show(
@@ -22,6 +23,7 @@ final class WellnessOverlayController {
     ) {
         hide(immediate: true)
         currentKind = kind
+        isVisible = true
 
         let screens: [NSScreen] = {
             switch settings.wellnessPlacement {
@@ -65,9 +67,13 @@ final class WellnessOverlayController {
             }()
 
             let panel = OverlayPanel(frame: frame, allowsKey: false, sharingHidden: hideFromCapture)
-            panel.level = .screenSaver
-            panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+            // Above apps, never modal — clicks/keys must reach whatever you are doing.
+            panel.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.floatingWindow)) + 2)
+            panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
             panel.ignoresMouseEvents = true
+            panel.acceptsMouseMovedEvents = false
+            panel.hasShadow = false
+            panel.hidesOnDeactivate = false
             panel.sharingType = hideFromCapture ? .none : .readOnly
             let hosting = NSHostingView(
                 rootView: WellnessView(
@@ -78,6 +84,7 @@ final class WellnessOverlayController {
                     position: settings.wellnessScreenPosition,
                     live: live
                 )
+                .allowsHitTesting(false)
                 .frame(width: frame.width, height: frame.height)
             )
             hosting.wantsLayer = true
@@ -106,6 +113,8 @@ final class WellnessOverlayController {
         DispatchQueue.main.asyncAfter(deadline: .now() + visible, execute: work)
     }
 
+    /// Dismiss only when forced (break screen / replace) or when the nudge finishes.
+    /// Do not call this for casual clicks, typing, or brief smart-pause — animation must finish.
     func hide(immediate: Bool = true) {
         hideWork?.cancel()
         hideWork = nil
@@ -120,6 +129,7 @@ final class WellnessOverlayController {
     }
 
     private func tearDown() {
+        isVisible = false
         panels.forEach { $0.orderOut(nil) }
         panels.removeAll()
         live = nil
@@ -191,6 +201,8 @@ struct WellnessView: View {
     let reduceMotion: Bool
     var badgeSize: CGFloat = Layout.wellnessSize
     var position: WellnessScreenPosition = .center
+    /// Settings card: shorter posture travel so the orb fits the preview frame.
+    var compactPreview: Bool = false
     var live: WellnessLiveState?
     @State private var appeared = false
 
@@ -222,7 +234,7 @@ struct WellnessView: View {
             Group {
                 switch kind {
                 case .posture:
-                    PostureLookAwayAnimation(reduceMotion: reduceMotion, live: live)
+                    PostureLookAwayAnimation(reduceMotion: reduceMotion, live: live, compactPreview: compactPreview)
                         .opacity(shown ? 1 : 0)
                 case .blink:
                     BlinkLookAwayAnimation(reduceMotion: reduceMotion, live: live)
@@ -242,7 +254,7 @@ struct WellnessView: View {
     }
 }
 
-/// Settings card loop: enter → hold → exit → pause → repeat.
+/// Settings card loop: circular badge like blink — posture skips tall rise so nothing clips.
 struct WellnessPreviewLoop: View {
     let kind: WellnessEngine.Kind
     @State private var shown = false
@@ -251,22 +263,26 @@ struct WellnessPreviewLoop: View {
     var body: some View {
         ZStack {
             if shown {
-                WellnessView(
-                    kind: kind,
-                    dim: false,
-                    reduceMotion: Motion.reduceMotion,
-                    badgeSize: kind == .posture ? 70 : 96
-                )
+                Group {
+                    switch kind {
+                    case .posture:
+                        PostureSettingsPreviewBadge(reduceMotion: Motion.reduceMotion)
+                    case .blink:
+                        BlinkLookAwayAnimation(reduceMotion: Motion.reduceMotion)
+                            .environment(\.wellnessBadgeSize, 48)
+                    }
+                }
                 .id(token)
                 .transition(
                     .asymmetric(
-                        insertion: .scale(scale: 0.65).combined(with: .opacity).combined(with: .offset(y: 14)),
-                        removal: .scale(scale: 0.8).combined(with: .opacity).combined(with: .offset(y: -8))
+                        insertion: .scale(scale: 0.82).combined(with: .opacity),
+                        removal: .scale(scale: 0.9).combined(with: .opacity)
                     )
                 )
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
         .task { await runLoop() }
     }
 
@@ -277,20 +293,108 @@ struct WellnessPreviewLoop: View {
             return
         }
         while !Task.isCancelled {
-            withAnimation(.spring(response: 0.5, dampingFraction: 0.76)) {
+            withAnimation(.spring(response: 0.48, dampingFraction: 0.78)) {
                 shown = true
             }
-            try? await Task.sleep(nanoseconds: kind == .posture ? 5_200_000_000 : 3_800_000_000)
+            try? await Task.sleep(nanoseconds: kind == .posture ? 3_600_000_000 : 3_800_000_000)
             if Task.isCancelled { return }
 
-            withAnimation(.easeIn(duration: 0.32)) {
+            withAnimation(.easeIn(duration: 0.28)) {
                 shown = false
             }
-            try? await Task.sleep(nanoseconds: 400_000_000)
+            try? await Task.sleep(nanoseconds: 360_000_000)
             if Task.isCancelled { return }
 
             token += 1
-            try? await Task.sleep(nanoseconds: 480_000_000)
+            try? await Task.sleep(nanoseconds: 420_000_000)
+        }
+    }
+}
+
+/// Compact settings-only posture: same circular footprint as blink (no tall rise/stretch).
+private struct PostureSettingsPreviewBadge: View {
+    let reduceMotion: Bool
+    @State private var shell: CGFloat = 0
+    @State private var inner: CGFloat = 0
+    @State private var bob: CGFloat = 0
+    @State private var pulse: CGFloat = 1
+
+    private let base: CGFloat = 48
+    private var orb: CGFloat { base * 1.18 }
+
+    var body: some View {
+        ZStack {
+            LiquidGlassShell(width: orb, height: orb)
+                .scaleEffect(shell)
+
+            ZStack {
+                WellnessBadge(pulse: pulse)
+                Image(systemName: "arrow.up")
+                    .font(.system(size: base * 0.38, weight: .bold))
+                    .foregroundStyle(.black.opacity(0.92))
+            }
+            .environment(\.wellnessBadgeSize, base)
+            .scaleEffect(inner)
+            .opacity(Double(inner))
+            .offset(y: bob)
+        }
+        .frame(width: orb + 16, height: orb + 20)
+        .task(id: reduceMotion) { await run() }
+    }
+
+    @MainActor
+    private func run() async {
+        if reduceMotion {
+            shell = 1
+            inner = 1
+            return
+        }
+        while !Task.isCancelled {
+            shell = 0
+            inner = 0
+            bob = 6
+            pulse = 1
+
+            withAnimation(.spring(response: 0.48, dampingFraction: 0.78)) {
+                shell = 1
+            }
+            try? await Task.sleep(nanoseconds: 320_000_000)
+            if Task.isCancelled { return }
+
+            withAnimation(.spring(response: 0.42, dampingFraction: 0.76)) {
+                inner = 1
+            }
+            try? await Task.sleep(nanoseconds: 280_000_000)
+            if Task.isCancelled { return }
+
+            withAnimation(.easeInOut(duration: 0.55)) {
+                bob = -5
+                pulse = 1.04
+            }
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            if Task.isCancelled { return }
+
+            withAnimation(.easeInOut(duration: 0.55)) {
+                bob = 0
+                pulse = 1
+            }
+            try? await Task.sleep(nanoseconds: 1_400_000_000)
+            if Task.isCancelled { return }
+
+            withAnimation(.easeIn(duration: 0.26)) {
+                inner = 0
+                pulse = 0.92
+            }
+            try? await Task.sleep(nanoseconds: 260_000_000)
+            if Task.isCancelled { return }
+
+            withAnimation(.easeIn(duration: 0.3)) {
+                shell = 0
+            }
+            try? await Task.sleep(nanoseconds: 320_000_000)
+            if Task.isCancelled { return }
+
+            try? await Task.sleep(nanoseconds: 280_000_000)
         }
     }
 }
@@ -341,6 +445,7 @@ private struct LiquidGlassShell: View {
 struct PostureLookAwayAnimation: View {
     let reduceMotion: Bool
     var live: WellnessLiveState?
+    var compactPreview: Bool = false
     @Environment(\.wellnessBadgeSize) private var base
     @State private var shell: CGFloat = 0
     @State private var inner: CGFloat = 0
@@ -348,14 +453,15 @@ struct PostureLookAwayAnimation: View {
     @State private var stretch: CGFloat = 0
     @State private var pulse: CGFloat = 1
 
-    private var travel: CGFloat { base * 2.45 }
+    /// Full-screen rise is tall; settings preview uses a short hop so nothing clips.
+    private var travel: CGFloat { base * (compactPreview ? 0.42 : 2.45) }
     private var orb: CGFloat { base * 1.18 }
 
     var body: some View {
         let innerY = travel / 2 - rise * travel
         let shellH = orb + stretch * travel
         let shellY = innerY + (shellH - orb) / 2
-        let totalH = orb + travel + 16
+        let totalH = orb + travel + (compactPreview ? 8 : 16)
 
         ZStack {
             LiquidGlassShell(width: orb, height: shellH)
@@ -373,7 +479,8 @@ struct PostureLookAwayAnimation: View {
             .offset(y: innerY)
         }
         .frame(width: orb + 12, height: totalH)
-        .task(id: reduceMotion) { await run() }
+        .shadow(color: .clear, radius: 0) // avoid soft shadow blowing past preview clip
+        .task(id: "\(reduceMotion)-\(compactPreview)") { await run() }
     }
 
     @MainActor
@@ -409,12 +516,12 @@ struct PostureLookAwayAnimation: View {
             if Task.isCancelled { return }
 
             live?.cue(.rise)
-            withAnimation(.easeInOut(duration: 1.28)) {
+            withAnimation(.easeInOut(duration: compactPreview ? 0.7 : 1.28)) {
                 rise = 1
-                stretch = 1
+                stretch = compactPreview ? 0.35 : 1
                 pulse = 1.02
             }
-            try? await Task.sleep(nanoseconds: 1_480_000_000)
+            try? await Task.sleep(nanoseconds: compactPreview ? 900_000_000 : 1_480_000_000)
             if Task.isCancelled { return }
 
             withAnimation(.easeInOut(duration: 0.48)) {

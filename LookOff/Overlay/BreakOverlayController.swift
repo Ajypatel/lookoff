@@ -74,15 +74,22 @@ final class BreakOverlayController {
     var onStage: ((BreakSoundStage) -> Void)?
 
     func apply(snapshot: EngineSnapshot, settings: AppSettings) {
+        let onBreak = snapshot.phase == .onBreak
         let bookmarkChanged = live.settings.wallpaperBookmark != settings.wallpaperBookmark
-        live.snapshot = snapshot
-        live.settings = settings
-        if bookmarkChanged || (live.customWallpaper == nil && settings.wallpaperBookmark != nil) {
-            live.customWallpaper = WallpaperLoader.image(from: settings.wallpaperBookmark)
-        }
         live.reduceMotion = settings.respectReduceMotion && Motion.reduceMotion
 
-        if snapshot.phase == .onBreak {
+        if bookmarkChanged || (live.customWallpaper == nil && settings.wallpaperBookmark != nil) {
+            live.settings = settings
+            live.customWallpaper = WallpaperLoader.image(from: settings.wallpaperBookmark)
+        }
+
+        // Skip Observation churn when overlay is not involved.
+        if onBreak || visible {
+            live.snapshot = snapshot
+            live.settings = settings
+        }
+
+        if onBreak {
             if !visible {
                 show()
             }
@@ -139,7 +146,7 @@ final class BreakOverlayController {
         live.isDismissing = false
         for panel in panels.values {
             panel.orderOut(nil)
-            panel.contentView = nil
+            // Keep hosting — next break reuses tree; only refresh backdrop.
         }
     }
 
@@ -199,6 +206,25 @@ final class BreakOverlayController {
             ?? live.customWallpaper
             ?? DesktopWallpaper.image(for: screen)
         let safeTop = screen.safeAreaInsets.top
+        let bounds = CGRect(origin: .zero, size: panel.frame.size)
+
+        if let existing = panel.contentView as? NSHostingView<BreakOverlayRoot> {
+            existing.rootView = BreakOverlayRoot(
+                live: live,
+                frozenBackdrop: frozen,
+                safeTop: safeTop,
+                fadeDuration: fadeDuration,
+                onSkip: { [weak self] in self?.onSkip?() },
+                onEnd: { [weak self] in self?.onEnd?() },
+                onLock: { [weak self] in self?.onLock?() },
+                onExtend: { [weak self] minutes in self?.onExtend?(minutes) },
+                onSecondTick: { [weak self] second in self?.onSecondTick?(second) },
+                onStage: { [weak self] stage in self?.onStage?(stage) }
+            )
+            existing.frame = bounds
+            return
+        }
+
         let root = BreakOverlayRoot(
             live: live,
             frozenBackdrop: frozen,
@@ -212,7 +238,6 @@ final class BreakOverlayController {
             onStage: { [weak self] stage in self?.onStage?(stage) }
         )
         let hosting = NSHostingView(rootView: root)
-        let bounds = CGRect(origin: .zero, size: panel.frame.size)
         hosting.frame = bounds
         hosting.autoresizingMask = [.width, .height]
         // Must stay clear — opaque layer survives SwiftUI fade and blacks out screen on exit
@@ -247,18 +272,43 @@ enum FrozenBackdrop {
 }
 
 enum DesktopWallpaper {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var cache: [CGDirectDisplayID: (path: String, image: NSImage)] = [:]
+
     static func image(for screen: NSScreen) -> NSImage? {
-        guard let url = NSWorkspace.shared.desktopImageURL(for: screen) else { return nil }
+        let displayID: CGDirectDisplayID = {
+            if let num = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber {
+                return num.uint32Value
+            }
+            return 0
+        }()
+        let url = NSWorkspace.shared.desktopImageURL(for: screen)
+        let path = url?.path ?? ""
+        lock.lock()
+        let hit = cache[displayID]
+        lock.unlock()
+        if let hit, hit.path == path {
+            return hit.image
+        }
+        guard let url else { return nil }
         // Dynamic wallpapers may be .heic packages — try direct load, then first image rep.
-        if let image = NSImage(contentsOf: url), image.size.width > 0 {
-            return image
+        let loaded: NSImage? = {
+            if let image = NSImage(contentsOf: url), image.size.width > 0 {
+                return image
+            }
+            if let reps = NSBitmapImageRep.imageReps(withContentsOf: url), let first = reps.first {
+                let image = NSImage(size: first.size)
+                image.addRepresentation(first)
+                return image
+            }
+            return nil
+        }()
+        if let loaded {
+            lock.lock()
+            cache[displayID] = (path, loaded)
+            lock.unlock()
         }
-        if let reps = NSBitmapImageRep.imageReps(withContentsOf: url), let first = reps.first {
-            let image = NSImage(size: first.size)
-            image.addRepresentation(first)
-            return image
-        }
-        return nil
+        return loaded
     }
 }
 

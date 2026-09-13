@@ -47,8 +47,18 @@ final class StatsStore {
     private(set) var days: [String: DayStats] = [:]
     private var lastSample: Date?
     private var lastPersist: Date?
+    private var lastAppSample: Date?
+    private var cachedFrontApp: String?
     private var sessionAccum: Double = 0
     private var inWorkSession = false
+
+    private static let dayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = .current
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
 
     init() {
         load()
@@ -74,7 +84,7 @@ final class StatsStore {
                 if delta > 0 {
                     day.screenSeconds += delta
                     sessionAccum += delta
-                    if let app = NSWorkspace.shared.frontmostApplication?.localizedName {
+                    if let app = frontmostAppName(now: now) {
                         day.appSeconds[app, default: 0] += delta
                     }
                 }
@@ -100,7 +110,7 @@ final class StatsStore {
         days[key] = day
         lastSample = now
         let eventful = snapshot.event != .none
-        if eventful || lastPersist == nil || now.timeIntervalSince(lastPersist ?? .distantPast) >= 15 {
+        if eventful || lastPersist == nil || now.timeIntervalSince(lastPersist ?? .distantPast) >= 60 {
             persist()
             lastPersist = now
         }
@@ -109,6 +119,18 @@ final class StatsStore {
     func flush() {
         persist()
         lastPersist = Date()
+    }
+
+    private func frontmostAppName(now: Date) -> String? {
+        if let lastAppSample,
+           now.timeIntervalSince(lastAppSample) < 5,
+           let cachedFrontApp {
+            return cachedFrontApp
+        }
+        let name = NSWorkspace.shared.frontmostApplication?.localizedName
+        cachedFrontApp = name
+        lastAppSample = now
+        return name
     }
 
     private func load() {
@@ -124,10 +146,6 @@ final class StatsStore {
     }
 
     private static func dayKey(_ date: Date = .now) -> String {
-        let f = DateFormatter()
-        f.calendar = .current
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "yyyy-MM-dd"
-        return f.string(from: date)
+        dayFormatter.string(from: date)
     }
 }
